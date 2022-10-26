@@ -79,12 +79,12 @@ func CleanupSRT() {
 }
 
 // NewSrtSocket - Create a new SRT Socket
-func NewSrtSocket(host string, port uint16, options map[string]string) *SrtSocket {
+func NewSrtSocket(host string, port uint16, options map[string]string) (*SrtSocket, error) {
 	s := new(SrtSocket)
 
 	s.socket = C.srt_create_socket()
 	if s.socket == SRT_INVALID_SOCK {
-		return nil
+		return nil, errors.New("Error creating srt socket: SRT_INVALID_SOCK")
 	}
 
 	s.host = host
@@ -126,10 +126,10 @@ func NewSrtSocket(host string, port uint16, options map[string]string) *SrtSocke
 	var err error
 	s.mode, err = s.preconfiguration()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("Error handling preconfiguration when creatig an srt socket: %w", err)
 	}
 
-	return s
+	return s, nil
 }
 
 func newFromSocket(acceptSocket *SrtSocket, socket C.SRTSOCKET) (*SrtSocket, error) {
