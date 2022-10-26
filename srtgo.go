@@ -84,7 +84,7 @@ func NewSrtSocket(host string, port uint16, options map[string]string) (*SrtSock
 
 	s.socket = C.srt_create_socket()
 	if s.socket == SRT_INVALID_SOCK {
-		return nil, errors.New("Error creating srt socket: SRT_INVALID_SOCK")
+		return nil, fmt.Errorf("Error creating srt socket: SRT_INVALID_SOCK, %w", srtGetAndClearError())
 	}
 
 	s.host = host
