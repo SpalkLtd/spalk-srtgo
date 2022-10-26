@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/haivision/srtgo"
+	srtgo "github.com/SpalkLtd/spalk-srtgo"
 )
 
 func main() {

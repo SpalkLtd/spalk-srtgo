@@ -8,7 +8,7 @@ import (
 	"log"
 	"net"
 
-	"github.com/haivision/srtgo"
+	srtgo "github.com/SpalkLtd/spalk-srtgo"
 )
 
 var allowedStreamIDs = map[string]bool{
