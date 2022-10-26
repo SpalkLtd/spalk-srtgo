@@ -1,6 +1,6 @@
-module github.com/haivision/srtgo
+module github.com/SpalkLtd/spalk-srtgo
 
-go 1.12
+go 1.18
 
 require (
 	github.com/mattn/go-pointer v0.0.1

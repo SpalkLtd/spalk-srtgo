@@ -7,7 +7,7 @@ import (
 func connectLoop(port uint16, semChan chan struct{}) {
 	for {
 		//fmt.Printf("Connecting\n")
-		s := NewSrtSocket("127.0.0.1", port, map[string]string{"blocking": "0", "mode": "caller"})
+		s, _ := NewSrtSocket("127.0.0.1", port, map[string]string{"blocking": "0", "mode": "caller"})
 		err := s.Connect()
 		if err != nil {
 			continue
@@ -23,7 +23,7 @@ func connectLoop(port uint16, semChan chan struct{}) {
 func benchAccept(blocking string, N int) {
 start:
 	port := randomPort()
-	s := NewSrtSocket("127.0.0.1", port, map[string]string{"blocking": blocking, "mode": "listener"})
+	s, _ := NewSrtSocket("127.0.0.1", port, map[string]string{"blocking": blocking, "mode": "listener"})
 	if s == nil {
 		goto start
 	}

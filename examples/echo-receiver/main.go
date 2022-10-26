@@ -8,7 +8,7 @@ import (
 	"log"
 	"net"
 
-	"github.com/haivision/srtgo"
+	srtgo "github.com/SpalkLtd/spalk-srtgo"
 )
 
 var allowedStreamIDs = map[string]bool{
@@ -55,7 +55,7 @@ func main() {
 	options["latency"] = "300"
 
 	// create and bind socket
-	sck := srtgo.NewSrtSocket("127.0.0.1", 6000, options)
+	sck, _ := srtgo.NewSrtSocket("127.0.0.1", 6000, options)
 
 	// set listen callback
 	sck.SetListenCallback(listenCallback)

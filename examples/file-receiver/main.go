@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/haivision/srtgo"
+	srtgo "github.com/SpalkLtd/spalk-srtgo"
 )
 
 func main() {
@@ -16,7 +16,7 @@ func main() {
 	port := 8090
 
 	fmt.Printf("(srt://%s:%d) Listening", hostname, port)
-	a := srtgo.NewSrtSocket(hostname, uint16(port), options)
+	a, _ := srtgo.NewSrtSocket(hostname, uint16(port), options)
 	err := a.Listen(2)
 	defer a.Close()
 	if err != nil {
