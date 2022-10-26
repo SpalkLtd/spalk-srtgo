@@ -5,7 +5,6 @@ package srtgo
 import "C"
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"syscall"
@@ -111,7 +110,7 @@ func setSocketLingerOption(s C.int, li int32) error {
 	}
 	res := C.srt_setsockopt(s, bindingPre, C.SRTO_LINGER, unsafe.Pointer(&lin), C.int(unsafe.Sizeof(lin)))
 	if res == SRT_ERROR {
-		return errors.New("failed to set linger")
+		return fmt.Errorf("failed to set linger: %w", srtGetAndClearError())
 	}
 	return nil
 }
