@@ -52,3 +52,35 @@ func (s SrtSocket) Read(b []byte) (n int, err error) {
 		n, err = srtRecvMsg2Impl(s.socket, b, nil)
 	}
 }
+
+// Read data from the SRT socket and put into the provided struct (reduces allocations)
+
+type SrtPacket struct {
+	Buffer  []byte
+	Srctime int64 // [OUT] timestamp set for this dataset when sending
+	Pktseq  int32 // [OUT] packet sequence number (first packet from the message, if it spans multiple UDP packets)
+	Msgno   int32 // [OUT] message number assigned to the currently received message
+}
+
+func (s SrtSocket) ReadPacket(packet *SrtPacket) (n int, err error) {
+	// Fast path
+	if !s.blocking {
+		s.pd.reset(ModeRead)
+	}
+
+	var msgctrl C.SRT_MSGCTRL
+	C.srt_msgctrl_init((*C.SRT_MSGCTRL)(unsafe.Pointer(&msgctrl)))
+
+	n, err = srtRecvMsg2Impl(s.socket, packet.Buffer, (*C.SRT_MSGCTRL)(unsafe.Pointer(&msgctrl)))
+
+	for {
+		if !errors.Is(err, error(EAsyncRCV)) || s.blocking {
+			packet.Pktseq = int32(msgctrl.pktseq)
+			packet.Msgno = int32(msgctrl.msgno)
+			packet.Srctime = int64(msgctrl.srctime)
+			return
+		}
+		s.pd.wait(ModeRead)
+		n, err = srtRecvMsg2Impl(s.socket, packet.Buffer, (*C.SRT_MSGCTRL)(unsafe.Pointer(&msgctrl)))
+	}
+}
