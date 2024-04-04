@@ -201,6 +201,7 @@ func (s *SrtSocket) Listen(backlog int) error {
 
 // Connect to a remote endpoint
 func (s *SrtSocket) Connect() error {
+	fmt.Println("[nathan debug] socket.Connect start")
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	sa, salen, err := CreateAddrInet(s.host, s.port)
@@ -208,14 +209,20 @@ func (s *SrtSocket) Connect() error {
 		return err
 	}
 
+	fmt.Println("[nathan debug] actual connect start")
 	res := C.srt_connect(s.socket, sa, C.int(salen))
+	fmt.Println("[nathan debug] actual connect end")
 	if res == SRT_ERROR {
+		fmt.Println("[nathan debug] actual connect had SRT error!")
 		C.srt_close(s.socket)
 		return srtGetAndClearError()
 	}
 
+	fmt.Printf("[nathan debug] s.blocking: %t\n", s.blocking)
 	if !s.blocking {
+		fmt.Println("[nathan debug] waiting...")
 		if err := s.pd.wait(ModeWrite); err != nil {
+			fmt.Printf("[nathan debug] waiting had error: %v\n", err)
 			return err
 		}
 	}

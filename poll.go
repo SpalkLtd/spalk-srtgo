@@ -6,6 +6,7 @@ package srtgo
 */
 import "C"
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,19 +21,20 @@ const (
 type PollMode int
 
 const (
-	ModeRead = PollMode(iota)
+	Blah = PollMode(iota)
 	ModeWrite
+	ModeRead
 )
 
 /*
-	pollDesc contains the polling state for the associated SrtSocket
-	closing: socket is closing, reject all poll operations
-	pollErr: an error occured on the socket, indicates it's not useable anymore.
-	unblockRd: is used to unblock the poller when the socket becomes ready for io
-	rdState: polling state for read operations
-	rdDeadline: deadline in NS before poll operation times out, -1 means timedout (needs to be cleared), 0 is without timeout
-	rdSeq: sequence number protects against spurious signalling of timeouts when timer is reset.
-	rdTimer: timer used to enforce deadline.
+pollDesc contains the polling state for the associated SrtSocket
+closing: socket is closing, reject all poll operations
+pollErr: an error occured on the socket, indicates it's not useable anymore.
+unblockRd: is used to unblock the poller when the socket becomes ready for io
+rdState: polling state for read operations
+rdDeadline: deadline in NS before poll operation times out, -1 means timedout (needs to be cleared), 0 is without timeout
+rdSeq: sequence number protects against spurious signalling of timeouts when timer is reset.
+rdTimer: timer used to enforce deadline.
 */
 type pollDesc struct {
 	lock       sync.Mutex
@@ -61,8 +63,8 @@ var pdPool = sync.Pool{
 		return &pollDesc{
 			unblockRd: make(chan interface{}, 1),
 			unblockWr: make(chan interface{}, 1),
-			rdTimer:   time.NewTimer(0),
-			wdTimer:   time.NewTimer(0),
+			rdTimer:   time.NewTimer(time.Duration(time.Hour * 1)), // hack fix
+			wdTimer:   time.NewTimer(time.Duration(time.Hour * 1)), // hack fix
 		}
 	},
 }
@@ -94,6 +96,7 @@ func (pd *pollDesc) release() {
 }
 
 func (pd *pollDesc) wait(mode PollMode) error {
+	fmt.Println("[nathan debug] wait start")
 	defer pd.reset(mode)
 	if err := pd.checkPollErr(mode); err != nil {
 		return err
@@ -104,10 +107,12 @@ func (pd *pollDesc) wait(mode PollMode) error {
 	timerSeq := int64(0)
 	pd.lock.Lock()
 	if mode == ModeRead {
+		fmt.Println("[nathan debug] setting up stuff for read mode")
 		timerSeq = pd.rtSeq
 		pd.rdLock.Lock()
 		defer pd.rdLock.Unlock()
 	} else if mode == ModeWrite {
+		fmt.Println("[nathan debug] setting up stuff for write mode")
 		timerSeq = pd.wtSeq
 		state = &pd.wrState
 		unblockChan = pd.unblockWr
@@ -133,8 +138,10 @@ wait:
 	for {
 		select {
 		case <-unblockChan:
+			fmt.Println("[nathan debug] unblock chan written to")
 			break wait
 		case <-expiryChan:
+			fmt.Println("[nathan debug] expiry chan written to")
 			pd.lock.Lock()
 			if mode == ModeRead {
 				if timerSeq == pd.rdSeq {
@@ -156,6 +163,7 @@ wait:
 		}
 	}
 	err := pd.checkPollErr(mode)
+	fmt.Println("[nathan debug] wait end")
 	return err
 }
 
@@ -205,9 +213,19 @@ func (pd *pollDesc) setDeadline(t time.Time, mode PollMode) {
 		}
 		pd.rdDeadline = d
 		if d > 0 {
-			pd.rdTimer.Reset(time.Duration(d))
+			// // blindly copied from docs - start
+			// if pd.rdTimer.Stop() {
+			// 	// timer stopped successfully; it won't have anything in timer.C
+			// } else {
+			// 	// timer already stopped; we better confirm that C has been emptied
+			// 	<-pd.rdTimer.C
+			// }
+			// // blindly copied from the docs - end
+			timeResetReturnValue := pd.rdTimer.Reset(time.Duration(d))
+			fmt.Printf("[nathan debug] finished setting up read deadline timer with duration: %.2f seconds. Timer was previously active: %t \n", time.Duration(d).Seconds(), timeResetReturnValue)
 		}
 		if d < 0 {
+			fmt.Println("[nathan debug] read deadline is in past, so setting read to unblock")
 			pd.unblock(ModeRead, false, false)
 		}
 	}
@@ -219,9 +237,16 @@ func (pd *pollDesc) setDeadline(t time.Time, mode PollMode) {
 		}
 		pd.wdDeadline = d
 		if d > 0 {
-			pd.wdTimer.Reset(time.Duration(d))
+			// // blindly copied from docs - start
+			// if !pd.wdTimer.Stop() {
+			// 	<-pd.wdTimer.C
+			// }
+			// // blindly copied from the docs - end
+			timeResetReturnValue := pd.wdTimer.Reset(time.Duration(d))
+			fmt.Printf("[nathan debug] finished setting up write deadline timer with duration: %.2f seconds. Timer was previously active: %t \n", time.Duration(d).Seconds(), timeResetReturnValue)
 		}
 		if d < 0 {
+			fmt.Println("[nathan debug] write deadline is in past, so setting write to unblock")
 			pd.unblock(ModeWrite, false, false)
 		}
 	}
