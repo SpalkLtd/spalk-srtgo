@@ -45,11 +45,19 @@ func (s SrtSocket) Read(b []byte) (n int, err error) {
 	}
 	n, err = srtRecvMsg2Impl(s.socket, b, nil)
 
+	// Issue THREE
+	// Previously, this for loop will never break if the deadline has been hit (return value of s.pd.wait(ModeRead))
 	for {
 		if !errors.Is(err, error(EAsyncRCV)) || s.blocking {
 			return
 		}
-		s.pd.wait(ModeRead)
+
+		err = s.pd.wait(ModeRead)
+		if err != nil {
+			fmt.Printf("[nathan debug] Read waiting had error: %v\n", err)
+			return
+		}
+
 		n, err = srtRecvMsg2Impl(s.socket, b, nil)
 	}
 }
@@ -74,8 +82,8 @@ func (s SrtSocket) ReadPacket(packet *SrtPacket) (n int, err error) {
 
 	n, err = srtRecvMsg2Impl(s.socket, packet.Buffer, (*C.SRT_MSGCTRL)(unsafe.Pointer(&msgctrl)))
 
-	// Issue TWO
-	// This for loop will never break if the deadline has been hit (return value of s.pd.wait(ModeRead))
+	// Issue THREE
+	// Previously, this for loop will never break if the deadline has been hit (return value of s.pd.wait(ModeRead))
 	for {
 		if !errors.Is(err, error(EAsyncRCV)) || s.blocking {
 			// this must include when the socket is closed, since I've seen this exit without the below fix
@@ -87,11 +95,8 @@ func (s SrtSocket) ReadPacket(packet *SrtPacket) (n int, err error) {
 		err = s.pd.wait(ModeRead)
 
 		// E.G., Error because we reached timed out. Like we do for connect.
-		if err != nil && !errors.Is(err, error(EAsyncRCV)) {
-			fmt.Printf("[nathan debug] read packet waiting had error: %v\n", err)
-			packet.Pktseq = int32(msgctrl.pktseq)
-			packet.Msgno = int32(msgctrl.msgno)
-			packet.Srctime = int64(msgctrl.srctime)
+		if err != nil {
+			fmt.Printf("[nathan debug] ReadPacket waiting had error: %v\n", err)
 			return
 		}
 

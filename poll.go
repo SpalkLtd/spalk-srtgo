@@ -20,9 +20,9 @@ const (
 
 type PollMode int
 
-// Issue THREE
+// Issue FOUR
 // The logic in setDeadline needs both ModeWrite and ModeRead to be non-zero.
-// E.G., Previously, setDeadline(modeWrite) is equivelant to setDeadline(modeRead + modeWrite)
+// E.G., Previously, setDeadline(modeWrite) is equivalent to setDeadline(modeRead + modeWrite)
 const (
 	Blah = PollMode(iota)
 	ModeWrite

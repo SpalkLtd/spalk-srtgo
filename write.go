@@ -17,6 +17,7 @@ int srt_sendmsg2_wrapped(SRTSOCKET u, const char* buf, int len, SRT_MSGCTRL *mct
 import "C"
 import (
 	"errors"
+	"fmt"
 	"syscall"
 	"unsafe"
 )
@@ -45,11 +46,19 @@ func (s SrtSocket) Write(b []byte) (n int, err error) {
 	}
 	n, err = srtSendMsg2Impl(s.socket, b, nil)
 
+	// Issue THREE
+	// Previously, this for loop would never break if the deadline has been hit (as per return value of s.pd.wait(ModeWrite))
 	for {
 		if !errors.Is(err, error(EAsyncSND)) || s.blocking {
 			return
 		}
+
 		s.pd.wait(ModeWrite)
+		if err != nil {
+			fmt.Printf("[nathan debug] Write waiting had error: %v\n", err)
+			return
+		}
+
 		n, err = srtSendMsg2Impl(s.socket, b, nil)
 	}
 }
