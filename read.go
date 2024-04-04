@@ -74,6 +74,8 @@ func (s SrtSocket) ReadPacket(packet *SrtPacket) (n int, err error) {
 
 	n, err = srtRecvMsg2Impl(s.socket, packet.Buffer, (*C.SRT_MSGCTRL)(unsafe.Pointer(&msgctrl)))
 
+	// Issue TWO
+	// This for loop will never break if the deadline has been hit (return value of s.pd.wait(ModeRead))
 	for {
 		if !errors.Is(err, error(EAsyncRCV)) || s.blocking {
 			// this must include when the socket is closed, since I've seen this exit without the below fix

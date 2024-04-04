@@ -20,6 +20,9 @@ const (
 
 type PollMode int
 
+// Issue THREE
+// The logic in setDeadline needs both ModeWrite and ModeRead to be non-zero.
+// E.G., Previously, setDeadline(modeWrite) is equivelant to setDeadline(modeRead + modeWrite)
 const (
 	Blah = PollMode(iota)
 	ModeWrite
@@ -63,8 +66,11 @@ var pdPool = sync.Pool{
 		return &pollDesc{
 			unblockRd: make(chan interface{}, 1),
 			unblockWr: make(chan interface{}, 1),
-			rdTimer:   time.NewTimer(time.Duration(time.Hour * 1)), // hack fix
-			wdTimer:   time.NewTimer(time.Duration(time.Hour * 1)), // hack fix
+			// Issue ONE
+			// These timers, which are how the deadline stuff works, fire instantly because they were time.NewTimer(0).
+			// A hack fix is below.
+			rdTimer: time.NewTimer(time.Duration(time.Hour * 1)), // hack fix
+			wdTimer: time.NewTimer(time.Duration(time.Hour * 1)), // hack fix
 		}
 	},
 }
@@ -213,14 +219,6 @@ func (pd *pollDesc) setDeadline(t time.Time, mode PollMode) {
 		}
 		pd.rdDeadline = d
 		if d > 0 {
-			// // blindly copied from docs - start
-			// if pd.rdTimer.Stop() {
-			// 	// timer stopped successfully; it won't have anything in timer.C
-			// } else {
-			// 	// timer already stopped; we better confirm that C has been emptied
-			// 	<-pd.rdTimer.C
-			// }
-			// // blindly copied from the docs - end
 			timeResetReturnValue := pd.rdTimer.Reset(time.Duration(d))
 			fmt.Printf("[nathan debug] finished setting up read deadline timer with duration: %.2f seconds. Timer was previously active: %t \n", time.Duration(d).Seconds(), timeResetReturnValue)
 		}
@@ -237,11 +235,6 @@ func (pd *pollDesc) setDeadline(t time.Time, mode PollMode) {
 		}
 		pd.wdDeadline = d
 		if d > 0 {
-			// // blindly copied from docs - start
-			// if !pd.wdTimer.Stop() {
-			// 	<-pd.wdTimer.C
-			// }
-			// // blindly copied from the docs - end
 			timeResetReturnValue := pd.wdTimer.Reset(time.Duration(d))
 			fmt.Printf("[nathan debug] finished setting up write deadline timer with duration: %.2f seconds. Timer was previously active: %t \n", time.Duration(d).Seconds(), timeResetReturnValue)
 		}
