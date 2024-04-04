@@ -20,11 +20,11 @@ const (
 
 type PollMode int
 
-// Issue FOUR
+// Issue 4
 // The logic in setDeadline needs both ModeWrite and ModeRead to be non-zero.
 // E.G., Previously, setDeadline(modeWrite) is equivalent to setDeadline(modeRead + modeWrite)
 const (
-	Blah = PollMode(iota)
+	ModeUnknown = PollMode(iota)
 	ModeWrite
 	ModeRead
 )
@@ -63,15 +63,16 @@ type pollDesc struct {
 
 var pdPool = sync.Pool{
 	New: func() interface{} {
-		return &pollDesc{
+		desc := &pollDesc{
 			unblockRd: make(chan interface{}, 1),
 			unblockWr: make(chan interface{}, 1),
-			// Issue ONE
-			// These timers, which are how the deadline stuff works, fire instantly because they were time.NewTimer(0).
-			// A hack fix is below.
-			rdTimer: time.NewTimer(time.Duration(time.Hour * 1)), // hack fix
-			wdTimer: time.NewTimer(time.Duration(time.Hour * 1)), // hack fix
+			rdTimer:   time.NewTimer(0),
+			wdTimer:   time.NewTimer(0),
 		}
+		// Creating timer with 0 duration makes it fire right away. Read the channel to prevent a false fire later.
+		<-desc.rdTimer.C
+		<-desc.wdTimer.C
+		return desc
 	},
 }
 
@@ -214,8 +215,11 @@ func (pd *pollDesc) setDeadline(t time.Time, mode PollMode) {
 	if mode == ModeRead || mode == ModeRead+ModeWrite {
 		pd.rdSeq++
 		pd.rtSeq = pd.rdSeq
-		if pd.rdDeadline > 0 {
-			pd.rdTimer.Stop()
+		// Issue 2
+		// Previously, there was a problem here according to https://github.com/Haivision/srtgo/pull/63.
+		// "If there is a delay between setting up deadlines, and the timer fired after the poll.Wait() had returned, that timer signal is not cleared from the channel and will cause wait to return immediately."
+		if pd.rdDeadline > 0 && !pd.rdTimer.Stop() {
+			<-pd.rdTimer.C
 		}
 		pd.rdDeadline = d
 		if d > 0 {
@@ -230,8 +234,11 @@ func (pd *pollDesc) setDeadline(t time.Time, mode PollMode) {
 	if mode == ModeWrite || mode == ModeRead+ModeWrite {
 		pd.wdSeq++
 		pd.wtSeq = pd.wdSeq
-		if pd.wdDeadline > 0 {
-			pd.wdTimer.Stop()
+		// Issue 2
+		// Previously, there was a problem here according to https://github.com/Haivision/srtgo/pull/63.
+		// "If there is a delay between setting up deadlines, and the timer fired after the poll.Wait() had returned, that timer signal is not cleared from the channel and will cause wait to return immediately."
+		if pd.wdDeadline > 0 && !pd.wdTimer.Stop() {
+			<-pd.wdTimer.C
 		}
 		pd.wdDeadline = d
 		if d > 0 {

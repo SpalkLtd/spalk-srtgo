@@ -45,15 +45,15 @@ func (s SrtSocket) Read(b []byte) (n int, err error) {
 	}
 	n, err = srtRecvMsg2Impl(s.socket, b, nil)
 
-	// Issue THREE
+	// Issue 3
 	// Previously, this for loop will never break if the deadline has been hit (return value of s.pd.wait(ModeRead))
 	for {
 		if !errors.Is(err, error(EAsyncRCV)) || s.blocking {
 			return
 		}
 
-		err = s.pd.wait(ModeRead)
-		if err != nil {
+		// E.G., Error because we reached timed out. Like we do for connect.
+		if err = s.pd.wait(ModeRead); err != nil {
 			fmt.Printf("[nathan debug] Read waiting had error: %v\n", err)
 			return
 		}
@@ -82,7 +82,7 @@ func (s SrtSocket) ReadPacket(packet *SrtPacket) (n int, err error) {
 
 	n, err = srtRecvMsg2Impl(s.socket, packet.Buffer, (*C.SRT_MSGCTRL)(unsafe.Pointer(&msgctrl)))
 
-	// Issue THREE
+	// Issue 3
 	// Previously, this for loop will never break if the deadline has been hit (return value of s.pd.wait(ModeRead))
 	for {
 		if !errors.Is(err, error(EAsyncRCV)) || s.blocking {
@@ -92,10 +92,8 @@ func (s SrtSocket) ReadPacket(packet *SrtPacket) (n int, err error) {
 			packet.Srctime = int64(msgctrl.srctime)
 		}
 
-		err = s.pd.wait(ModeRead)
-
 		// E.G., Error because we reached timed out. Like we do for connect.
-		if err != nil {
+		if err = s.pd.wait(ModeRead); err != nil {
 			fmt.Printf("[nathan debug] ReadPacket waiting had error: %v\n", err)
 			return
 		}
