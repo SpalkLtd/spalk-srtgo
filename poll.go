@@ -127,6 +127,13 @@ func (pd *pollDesc) wait(mode PollMode) error {
 			break
 		}
 	}
+	// Check if close() ran between the initial checkPollErr() and the CAS.
+	// If so, nobody will signal us — reset state and return immediately.
+	if pd.closing {
+		atomic.StoreInt32(state, pollDefault)
+		pd.lock.Unlock()
+		return &SrtSocketClosed{}
+	}
 	pd.lock.Unlock()
 
 wait:
@@ -167,6 +174,20 @@ func (pd *pollDesc) close() {
 	}
 	pd.closing = true
 	pd.pollS.pollClose(pd)
+	// Signal any goroutines blocked in wait() so they see closing == true.
+	// We inline the signalling here because unblock() acquires pd.lock.
+	if atomic.LoadInt32(&pd.rdState) == pollWait {
+		select {
+		case pd.unblockRd <- struct{}{}:
+		default:
+		}
+	}
+	if atomic.LoadInt32(&pd.wrState) == pollWait {
+		select {
+		case pd.unblockWr <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (pd *pollDesc) checkPollErr(mode PollMode) error {
@@ -259,11 +280,11 @@ func (pd *pollDesc) unblock(mode PollMode, pollerr, ioready bool) {
 func (pd *pollDesc) reset(mode PollMode) {
 	if mode == ModeRead {
 		pd.rdLock.Lock()
-		pd.rdState = pollDefault
+		atomic.StoreInt32(&pd.rdState, pollDefault)
 		pd.rdLock.Unlock()
 	} else if mode == ModeWrite {
 		pd.wrLock.Lock()
-		pd.wrState = pollDefault
+		atomic.StoreInt32(&pd.wrState, pollDefault)
 		pd.wrLock.Unlock()
 	}
 }
