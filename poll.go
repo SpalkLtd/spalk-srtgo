@@ -25,14 +25,14 @@ const (
 )
 
 /*
-	pollDesc contains the polling state for the associated SrtSocket
-	closing: socket is closing, reject all poll operations
-	pollErr: an error occured on the socket, indicates it's not useable anymore.
-	unblockRd: is used to unblock the poller when the socket becomes ready for io
-	rdState: polling state for read operations
-	rdDeadline: deadline in NS before poll operation times out, -1 means timedout (needs to be cleared), 0 is without timeout
-	rdSeq: sequence number protects against spurious signalling of timeouts when timer is reset.
-	rdTimer: timer used to enforce deadline.
+pollDesc contains the polling state for the associated SrtSocket
+closing: socket is closing, reject all poll operations
+pollErr: an error occured on the socket, indicates it's not useable anymore.
+unblockRd: is used to unblock the poller when the socket becomes ready for io
+rdState: polling state for read operations
+rdDeadline: deadline in NS before poll operation times out, -1 means timedout (needs to be cleared), 0 is without timeout
+rdSeq: sequence number protects against spurious signalling of timeouts when timer is reset.
+rdTimer: timer used to enforce deadline.
 */
 type pollDesc struct {
 	lock       sync.Mutex
@@ -71,6 +71,15 @@ func pollDescInit(s C.SRTSOCKET) *pollDesc {
 	pd := pdPool.Get().(*pollDesc)
 	pd.lock.Lock()
 	defer pd.lock.Unlock()
+	// Drain stale signals that may remain from a previous pool user's close().
+	select {
+	case <-pd.unblockRd:
+	default:
+	}
+	select {
+	case <-pd.unblockWr:
+	default:
+	}
 	pd.fd = s
 	pd.rdState = pollDefault
 	pd.wrState = pollDefault
@@ -168,14 +177,20 @@ wait:
 
 func (pd *pollDesc) close() {
 	pd.lock.Lock()
-	defer pd.lock.Unlock()
 	if pd.closing {
+		pd.lock.Unlock()
 		return
 	}
 	pd.closing = true
+	pd.lock.Unlock()
+
+	// Remove from epoll and decrement the pollServer ref count.
+	// pd.lock is NOT held here — this avoids a lock-ordering deadlock with
+	// run() which holds pollDescLock then acquires pd.lock via unblock().
 	pd.pollS.pollClose(pd)
+
 	// Signal any goroutines blocked in wait() so they see closing == true.
-	// We inline the signalling here because unblock() acquires pd.lock.
+	// Atomic loads + non-blocking channel sends are safe without pd.lock.
 	if atomic.LoadInt32(&pd.rdState) == pollWait {
 		select {
 		case pd.unblockRd <- struct{}{}:

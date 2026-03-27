@@ -51,6 +51,23 @@ type SrtSocket struct {
 	mode        int
 	pktSize     int
 	pollTimeout int64
+	closeGuard  *closeOnce // pointer so value-receiver copies don't race
+}
+
+// closeOnce prevents double-close of the C socket.
+type closeOnce struct {
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *closeOnce) do() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	c.closed = true
+	return true
 }
 
 var (
@@ -75,12 +92,18 @@ func InitSRT() {
 
 // CleanupSRT - Cleanup SRT lib
 func CleanupSRT() {
+	phMu.Lock()
+	if phctx != nil {
+		pollServerStop() // releases phMu internally, then re-acquires
+	}
+	phMu.Unlock()
 	C.srt_cleanup()
 }
 
 // NewSrtSocket - Create a new SRT Socket
 func NewSrtSocket(host string, port uint16, options map[string]string) (*SrtSocket, error) {
 	s := new(SrtSocket)
+	s.closeGuard = &closeOnce{}
 
 	s.socket = C.srt_create_socket()
 	if s.socket == SRT_INVALID_SOCK {
@@ -114,7 +137,7 @@ func NewSrtSocket(host string, port uint16, options map[string]string) (*SrtSock
 
 	finalizer := func(obj interface{}) {
 		sf := obj.(*SrtSocket)
-		sf.Close()
+		sf.Close() // idempotent — CAS guard prevents double-close
 		if sf.pd != nil {
 			sf.pd.release()
 		}
@@ -126,6 +149,12 @@ func NewSrtSocket(host string, port uint16, options map[string]string) (*SrtSock
 	var err error
 	s.mode, err = s.preconfiguration()
 	if err != nil {
+		// Clean up the pollDesc that was already registered so we don't
+		// leak a pollServer ref count.
+		if s.pd != nil {
+			s.pd.close()
+		}
+		C.srt_close(s.socket)
 		return nil, fmt.Errorf("Error handling preconfiguration when creatig an srt socket: %w", err)
 	}
 
@@ -134,6 +163,7 @@ func NewSrtSocket(host string, port uint16, options map[string]string) (*SrtSock
 
 func newFromSocket(acceptSocket *SrtSocket, socket C.SRTSOCKET) (*SrtSocket, error) {
 	s := new(SrtSocket)
+	s.closeGuard = &closeOnce{}
 	s.socket = socket
 	s.pktSize = acceptSocket.pktSize
 	s.blocking = acceptSocket.blocking
@@ -277,11 +307,15 @@ func (s *SrtSocket) SetWriteDeadline(deadline time.Time) {
 
 // Close the SRT socket
 func (s *SrtSocket) Close() {
-
-	C.srt_close(s.socket)
+	if !s.closeGuard.do() {
+		return // already closed
+	}
+	// Remove from epoll BEFORE closing the C socket so that
+	// srt_getsockstate and srt_epoll_remove_usock see a valid fd.
 	if !s.blocking {
 		s.pd.close()
 	}
+	C.srt_close(s.socket)
 	callbackMutex.Lock()
 	if ptr, exists := listenCallbackMap[s.socket]; exists {
 		gopointer.Unref(ptr)
