@@ -199,6 +199,25 @@ func (s *SrtSocket) Listen(backlog int) error {
 	return nil
 }
 
+// ConnectError wraps an SRT error with the reject reason captured before the
+// socket was closed. Use errors.Is/As against the standard SRT error types
+// (SrtSocketClosed, SrtConnectionRejected, etc.) and read RejectReason /
+// RejectReasonStr for additional detail.
+type ConnectError struct {
+	Err              error
+	RejectReason     int
+	RejectReasonDesc string
+}
+
+func (e *ConnectError) Error() string {
+	if e.RejectReason != 0 {
+		return fmt.Sprintf("%s (reject reason %d: %s)", e.Err.Error(), e.RejectReason, e.RejectReasonDesc)
+	}
+	return e.Err.Error()
+}
+
+func (e *ConnectError) Unwrap() error { return e.Err }
+
 // Connect to a remote endpoint
 func (s *SrtSocket) Connect() error {
 	runtime.LockOSThread()
@@ -210,8 +229,16 @@ func (s *SrtSocket) Connect() error {
 
 	res := C.srt_connect(s.socket, sa, C.int(salen))
 	if res == SRT_ERROR {
+		// Capture reject reason BEFORE srt_close destroys the socket state.
+		rejectReason := int(C.srt_getrejectreason(s.socket))
+		rejectReasonDesc := C.GoString(C.srt_rejectreason_str(C.int(rejectReason)))
+		srtErr := srtGetAndClearError()
 		C.srt_close(s.socket)
-		return srtGetAndClearError()
+		return &ConnectError{
+			Err:              srtErr,
+			RejectReason:     rejectReason,
+			RejectReasonDesc: rejectReasonDesc,
+		}
 	}
 
 	if !s.blocking {
@@ -390,6 +417,19 @@ func (s SrtSocket) SetRejectReason(value int) error {
 		return errors.New(C.GoString(C.srt_getlasterror_str()))
 	}
 	return nil
+}
+
+// GetRejectReason returns the reject reason code set on the socket.
+// This should be called after a failed Connect() to determine why the
+// connection was rejected. Returns 0 (SRT_REJ_UNKNOWN) if no reject
+// reason was set or the socket is invalid.
+func (s SrtSocket) GetRejectReason() int {
+	return int(C.srt_getrejectreason(s.socket))
+}
+
+// RejectReasonStr returns a human-readable string for a reject reason code.
+func RejectReasonStr(reason int) string {
+	return C.GoString(C.srt_rejectreason_str(C.int(reason)))
 }
 
 // GetSockOptByte - return byte value obtained with srt_getsockopt
