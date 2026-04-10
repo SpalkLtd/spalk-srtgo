@@ -210,6 +210,12 @@ type ConnectError struct {
 }
 
 func (e *ConnectError) Error() string {
+	if e.Err == nil {
+		if e.RejectReason != 0 {
+			return fmt.Sprintf("connect error (reject reason %d: %s)", e.RejectReason, e.RejectReasonDesc)
+		}
+		return "connect error"
+	}
 	if e.RejectReason != 0 {
 		return fmt.Sprintf("%s (reject reason %d: %s)", e.Err.Error(), e.RejectReason, e.RejectReasonDesc)
 	}
@@ -420,9 +426,12 @@ func (s SrtSocket) SetRejectReason(value int) error {
 }
 
 // GetRejectReason returns the reject reason code set on the socket.
-// This should be called after a failed Connect() to determine why the
-// connection was rejected. Returns 0 (SRT_REJ_UNKNOWN) if no reject
-// reason was set or the socket is invalid.
+// This is useful on the listener/callee side to check why a peer was
+// rejected or disconnected, before the socket has been closed.
+// Note: after a failed Connect(), the socket is already closed so this
+// will return 0; use the ConnectError returned by Connect() instead.
+// Returns 0 (SRT_REJ_UNKNOWN) if no reject reason was set or the
+// socket is invalid.
 func (s SrtSocket) GetRejectReason() int {
 	return int(C.srt_getrejectreason(s.socket))
 }
