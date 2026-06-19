@@ -13,28 +13,57 @@ import (
 
 var (
 	phctx *pollServer
-	once  sync.Once
+	phMu  sync.Mutex // protects phctx and lifecycle
 )
 
+// pollServerCtx returns the singleton pollServer, starting it if necessary.
+// It increments the reference count — the caller must eventually call decref()
+// (via pollClose) to allow shutdown.
 func pollServerCtx() *pollServer {
-	once.Do(pollServerCtxInit)
+	phMu.Lock()
+	defer phMu.Unlock()
+	if phctx == nil {
+		eid := C.srt_epoll_create()
+		C.srt_epoll_set(eid, C.SRT_EPOLL_ENABLE_EMPTY)
+		phctx = &pollServer{
+			srtEpollDescr: eid,
+			pollDescs:     make(map[C.SRTSOCKET]*pollDesc),
+			stopCh:        make(chan struct{}),
+			stopped:       make(chan struct{}),
+		}
+		go phctx.run()
+	}
+	phctx.refs++
 	return phctx
 }
 
-func pollServerCtxInit() {
-	eid := C.srt_epoll_create()
-	C.srt_epoll_set(eid, C.SRT_EPOLL_ENABLE_EMPTY)
-	phctx = &pollServer{
-		srtEpollDescr: eid,
-		pollDescs:     make(map[C.SRTSOCKET]*pollDesc),
+// pollServerStop stops the pollServer if it is running and waits for the
+// run() goroutine to exit. Must be called with phMu held. The lock is held
+// throughout — run() does not need phMu so there is no deadlock.
+func pollServerStop() {
+	if phctx == nil {
+		return
 	}
-	go phctx.run()
+	select {
+	case <-phctx.stopCh:
+		// Already signalled (e.g. concurrent CleanupSRT + last socket close).
+		// Just wait for run() to finish.
+	default:
+		close(phctx.stopCh)
+	}
+	// Wait for run() to exit. run() never acquires phMu, so this is safe
+	// to do while holding the lock.
+	<-phctx.stopped
+	phctx = nil
 }
 
 type pollServer struct {
 	srtEpollDescr C.int
 	pollDescLock  sync.Mutex
 	pollDescs     map[C.SRTSOCKET]*pollDesc
+	refs          int
+	stopCh        chan struct{}
+	stopped       chan struct{}
 }
 
 func (p *pollServer) pollOpen(pd *pollDesc) {
@@ -55,6 +84,11 @@ func (p *pollServer) pollClose(pd *pollDesc) {
 	sockstate := C.srt_getsockstate(pd.fd)
 	//Broken/closed sockets get removed internally by SRT lib
 	if sockstate == C.SRTS_BROKEN || sockstate == C.SRTS_CLOSING || sockstate == C.SRTS_CLOSED || sockstate == C.SRTS_NONEXIST {
+		// Still need to clean up our map and decrement ref count
+		p.pollDescLock.Lock()
+		delete(p.pollDescs, pd.fd)
+		p.pollDescLock.Unlock()
+		p.decref()
 		return
 	}
 	ret := C.srt_epoll_remove_usock(p.srtEpollDescr, pd.fd)
@@ -64,21 +98,42 @@ func (p *pollServer) pollClose(pd *pollDesc) {
 	p.pollDescLock.Lock()
 	delete(p.pollDescs, pd.fd)
 	p.pollDescLock.Unlock()
+	p.decref()
 }
 
-func init() {
-
+// decref decrements the reference count and triggers shutdown when it hits zero.
+func (p *pollServer) decref() {
+	phMu.Lock()
+	defer phMu.Unlock()
+	p.refs--
+	if p.refs <= 0 {
+		pollServerStop()
+	}
 }
 
 func (p *pollServer) run() {
-	timeoutMs := C.int64_t(-1)
+	defer close(p.stopped)
+	timeoutMs := C.int64_t(100) // 100ms so we can check stopCh periodically
 	fds := [128]C.SRT_EPOLL_EVENT{}
 	fdlen := C.int(128)
 	for {
+		select {
+		case <-p.stopCh:
+			C.srt_epoll_release(p.srtEpollDescr)
+			return
+		default:
+		}
 		res := C.srt_epoll_uwait(p.srtEpollDescr, &fds[0], fdlen, timeoutMs)
 		if res == 0 {
-			continue //Shouldn't happen with -1
+			continue // timeout, no events
 		} else if res == -1 {
+			// During shutdown the epoll descriptor may have been released.
+			select {
+			case <-p.stopCh:
+				return
+			default:
+			}
+			// Genuine error outside of shutdown
 			panic("srt_epoll_error")
 		} else if res > 0 {
 			max := int(res)
@@ -91,6 +146,9 @@ func (p *pollServer) run() {
 				events := fds[i].events
 
 				pd := p.pollDescs[s]
+				if pd == nil {
+					continue // socket already removed
+				}
 				if events&C.SRT_EPOLL_ERR != 0 {
 					pd.unblock(ModeRead, true, false)
 					pd.unblock(ModeWrite, true, false)
